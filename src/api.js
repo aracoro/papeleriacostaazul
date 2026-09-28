@@ -13,39 +13,44 @@ const SESSION_KEY = 'authSession';
 const USER_KEY = 'authUser';
 
 /* =========================
-   SESIÓN LOCAL
+   SESIÓN (solo en memoria)
+   La sesión vive únicamente mientras la pestaña está abierta.
+   Al refrescar (F5) o cerrar la pestaña se pierde y la app
+   regresa al login, como lo pide el profesor.
 ========================= */
 
+let sesionActual = null;
+let usuarioActual = null;
+
 export function getSavedSession() {
-  try {
-    return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
-  } catch {
-    return null;
-  }
+  return sesionActual;
 }
 
 export function getSavedUser() {
-  try {
-    return JSON.parse(localStorage.getItem(USER_KEY) || 'null');
-  } catch {
-    return null;
-  }
+  return usuarioActual;
 }
 
 export function saveSession(user, session) {
   if (user && session) {
-    localStorage.setItem(USER_KEY, JSON.stringify(user));
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    clearSession();
+    usuarioActual = user;
+    sesionActual = session;
   } else {
     clearSession();
   }
 }
 
 export function clearSession() {
-  localStorage.removeItem(USER_KEY);
-  localStorage.removeItem(SESSION_KEY);
-  // Claves que usaba la versión anterior
-  ['auth_user', 'user', 'session_user', 'session'].forEach((k) => localStorage.removeItem(k));
+  usuarioActual = null;
+  sesionActual = null;
+  // Limpia lo que hayan dejado guardado versiones anteriores de la app
+  try {
+    ['authUser', 'authSession', 'auth_user', 'user', 'session_user', 'session'].forEach((k) =>
+      localStorage.removeItem(k)
+    );
+  } catch {
+    /* sin acceso a localStorage: no pasa nada */
+  }
 }
 
 /* =========================
@@ -64,20 +69,39 @@ function query(params = {}) {
 async function apiRequest(path, { method = 'GET', body, raw = false } = {}) {
   const isFormData = body instanceof FormData;
   const token = getSavedSession()?.token;
+  const url = `${API_BASE}${path}`;
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers: {
-      ...(isFormData || body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
-  });
+  console.log('[1 FRONT] Petición →', method, url, '| API_BASE =', API_BASE);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: {
+        ...(isFormData || body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: body === undefined ? undefined : isFormData ? body : JSON.stringify(body),
+    });
+  } catch (error) {
+    console.error('[X FRONT] No hubo respuesta (red/CORS):', error);
+    throw error;
+  }
+
+  console.log(
+    '[2 FRONT] Respuesta ←',
+    response.status,
+    response.url,
+    '| content-type:', response.headers.get('content-type'),
+    '| x-vercel-error:', response.headers.get('x-vercel-error')
+  );
 
   if (raw && response.ok) return response;
 
   const contentType = response.headers.get('content-type') || '';
   const payload = contentType.includes('application/json') ? await response.json() : await response.text();
+
+  console.log('[3 FRONT] Cuerpo de la respuesta:', payload);
 
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/auth/')) {
